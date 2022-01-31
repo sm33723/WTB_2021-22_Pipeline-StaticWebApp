@@ -1,0 +1,126 @@
+trigger:
+- '*'
+
+stages:
+# Build
+- stage: 'Build'
+  displayName: 'Build Stage'
+  jobs: 
+  - job:
+    displayName: 'Build Job'
+
+    # build na ubuntu-20.04 z npm
+    pool:
+      vmImage: 'ubuntu-20.04'
+      demands:
+      - npm
+
+    steps:
+      # installuje Node
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '14'
+      displayName: 'Install Node.js'
+
+      # skrypt bash -> instalacja angular cli + dependencies + build + build.info
+    - script: |
+        npm install -g @angular/cli
+        npm install
+        ng build
+        
+        echo "BUILD @ $(date +"%Y-%m-%d %H:%M:%S")" > dist/build.info
+        echo "" >> dist/build.info
+        echo "$(ng --version)" >> dist/build.info
+
+        cd ./dist/HelloWorld/
+        zip -r build.zip ./*
+        mv build.zip ../../build.zip
+        cd
+        
+      displayName: 'build project'
+
+    # kopiuje zbudowany projekt do `ArtifactStagingDirectory`
+    - task: CopyFiles@2
+      displayName: 'Copy project to Artifact Staging Directory'
+      inputs:
+        Contents: 'build.zip'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+    # wysyła zbudowany projekt jak artefakt do Azure'a
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact'
+      inputs: 
+        PathtoPublish: $(Build.ArtifactStagingDirectory)
+        ArtifactName: Build
+
+# Wysłanie zbudowanego projektu do środowiska prod
+- stage: 'Dev'
+  displayName: 'Deploy to Dev'
+  dependsOn: Build
+
+  variables:
+  - group: 'dev_var_group'
+  
+  jobs: 
+  - job:
+    displayName: 'Dev'
+
+    pool:
+      vmImage: 'ubuntu-20.04'
+
+    steps:
+    - task: DownloadBuildArtifacts@0
+      inputs:
+        buildType: 'current'
+        downloadType: 'single'
+        artifactName: Build
+        downloadPath: './'
+
+    - task: ExtractFiles@1
+      inputs:
+        archiveFilePatterns: ./Build/*.zip
+        destinationFolder: ./Build/build
+      
+    - task: AzureStaticWebApp@0
+      inputs:
+        app_location: './Build/build'
+        api_location: 'api'
+        output_location: './'
+      env:
+        azure_static_web_apps_api_token: $(deployment_token)
+
+# Wysłanie zbudowanego projektu do środowiska prod (po manualnej aporbacie)
+- stage: 'Prod'
+  displayName: 'Deploy to Production'
+  dependsOn: Dev
+
+  variables:
+  - group: 'prod_var_group'
+
+  jobs:
+  - job:
+    displayName: 'Prod'
+
+    pool:
+      vmImage: 'ubuntu-20.04'
+
+    steps:
+    - task: DownloadBuildArtifacts@0
+      inputs:
+        buildType: 'current'
+        downloadType: 'single'
+        artifactName: Build
+        downloadPath: './'
+
+    - task: ExtractFiles@1
+      inputs:
+        archiveFilePatterns: ./Build/*.zip
+        destinationFolder: ./Build/build
+      
+    - task: AzureStaticWebApp@0
+      inputs:
+        app_location: './Build/build'
+        api_location: 'api'
+        output_location: './'
+      env:
+        azure_static_web_apps_api_token: $(deployment_token)
